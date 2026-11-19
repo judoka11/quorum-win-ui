@@ -57,6 +57,10 @@ main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .empty h1 { color: var(--ink); font-size: 28px; letter-spacing: -.02em; margin: 0 0 8px; }
 .empty p { margin: 4px 0; }
 .q-title { font-size: 22px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn + .turn { border-top: 1px solid var(--line); margin-top: 30px; padding-top: 26px; }
+.you { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 650; margin-bottom: 2px; }
+.q-reply { font-size: 17px; font-weight: 600; margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hist .count { font-size: 11px; color: var(--muted); background: var(--chip); border-radius: 999px; padding: 0 7px; flex: none; }
 .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 18px; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); }
@@ -174,7 +178,6 @@ const store = {
 
 let catalog = null, methods = {};
 let cfg = store.get("cfg", { on: {}, model: {}, effort: {}, method: "standard", synth: "claude" });
-let current = null;   // { id, next, data, messages, timer }
 
 function who(id) {
   const i = String(id).indexOf(":");
@@ -279,11 +282,19 @@ async function loadModels(refresh) {
 
 /* ---------- composer ---------- */
 const ta = $("#q");
-function running() { return current?.data?.status === "running"; }
+let historyItems = [];
+// current: { thread, ids: [run ids, oldest first], runs: { id: { next, data, messages } }, open: Set, timer }
+let current = null;
+
+const runningId = () => current?.ids.find((id) => current.runs[id]?.data?.status === "running");
+function running() { return !!runningId(); }
 function updateSend() {
   const btn = $("#sendBtn");
+  ta.placeholder = current
+    ? "Reply: give feedback or ask a follow-up. They'll debate it with the earlier answers in mind…"
+    : "Ask something. They'll answer, critique each other and agree on a final answer…";
   if (running()) { btn.textContent = "Stop"; btn.classList.add("stop"); btn.disabled = false; return; }
-  btn.textContent = "Ask"; btn.classList.remove("stop");
+  btn.textContent = current ? "Reply" : "Ask"; btn.classList.remove("stop");
   btn.disabled = !ta.value.trim() || participants().length < 2;
   btn.title = participants().length < 2 ? "Turn on at least two AIs" : "";
 }
@@ -295,71 +306,110 @@ async function ask() {
   const question = ta.value.trim();
   if (!question) return;
   $("#sendBtn").disabled = true;
+  const parent_id = current?.ids.at(-1);
   try {
-    const res = await api("/api/runs", { method: "POST", body: JSON.stringify({ question, participants: participants(), method: cfg.method }) });
+    const res = await api("/api/runs", { method: "POST", body: JSON.stringify({ question, participants: participants(), method: cfg.method, parent_id }) });
     ta.value = ""; ta.style.height = "auto";
-    await openRun(res.run_id);
+    if (current && parent_id) {
+      const cur = current;
+      cur.ids.push(res.run_id);
+      cur.runs[res.run_id] = { next: 0, data: null, messages: [] };
+      cur.open = new Set([res.run_id]);   // fold the earlier debates away
+      if (cur.timer) clearTimeout(cur.timer);
+      await poll();
+      document.getElementById("turn-" + res.run_id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      await loadHistory();
+      await openThread(res.run_id);
+    }
     loadHistory();
   } catch (e) { toast(e.message); updateSend(); }
 }
 async function stop() {
-  try { await api(`/api/runs/${current.id}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
+  const id = runningId();
+  if (!id) return;
+  try { await api(`/api/runs/${id}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
 }
 
-/* ---------- history ---------- */
+/* ---------- history (one row per thread) ---------- */
 async function loadHistory() {
-  let items = [];
-  try { items = await api("/api/history"); } catch {}
-  $("#history").innerHTML = items.length ? items.map((h) => `
-    <div class="hist ${current?.id === h.id ? "active" : ""}" data-id="${h.id}" title="${esc(h.question)}">
-      ${h.running ? '<span class="live-dot"></span>' : ""}<span class="q">${esc(h.question)}</span>
-      <button class="del" data-del="${h.id}" title="Delete">×</button></div>`).join("")
+  try { historyItems = await api("/api/history"); } catch { historyItems = []; }
+  const threads = new Map();   // newest activity first, since the history is newest first
+  for (const h of historyItems) {
+    if (!threads.has(h.thread)) threads.set(h.thread, { id: h.thread, root: h, count: 0, running: false });
+    const t = threads.get(h.thread);
+    t.count++; t.running ||= h.running;
+    if (h.id === h.thread) t.root = h;
+  }
+  const list = [...threads.values()];
+  $("#history").innerHTML = list.length ? list.map((t) => `
+    <div class="hist ${current?.thread === t.id ? "active" : ""}" data-id="${t.id}" title="${esc(t.root.question)}">
+      ${t.running ? '<span class="live-dot"></span>' : ""}<span class="q">${esc(t.root.question)}</span>
+      ${t.count > 1 ? `<span class="count" title="${t.count} turns">${t.count}</span>` : ""}
+      <button class="del" data-del="${t.id}" title="Delete this conversation">×</button></div>`).join("")
     : `<div class="hist-label" style="text-transform:none;letter-spacing:0">Nothing yet.</div>`;
   $("#history").querySelectorAll(".hist").forEach((x) => x.onclick = (e) => {
     if (e.target.dataset.del) return;
-    document.body.classList.remove("side-open"); openRun(x.dataset.id);
+    document.body.classList.remove("side-open"); openThread(x.dataset.id);
   });
   $("#history").querySelectorAll("[data-del]").forEach((x) => x.onclick = async () => {
-    if (!confirm("Delete this discussion?")) return;
+    if (!confirm("Delete this whole conversation?")) return;
     try { await api(`/api/history/${x.dataset.del}`, { method: "DELETE" }); } catch (e) { return toast(e.message); }
-    if (current?.id === x.dataset.del) showEmpty();
-    loadHistory();
+    if (current?.thread === x.dataset.del) showEmpty(); else loadHistory();
   });
 }
 
-/* ---------- run view ---------- */
+/* ---------- thread view ---------- */
 function showEmpty() {
   if (current?.timer) clearTimeout(current.timer);
   current = null;
   history.replaceState(null, "", "#");
   $("#content").innerHTML = `<div class="empty"><h1>Ask your AIs together</h1>
     <p>Each one answers on its own first, then they critique each other, discuss, and agree on one final answer.</p>
-    <p>You'll see where they agree, where they don't, and how sure each one is.</p></div>`;
+    <p>You'll see where they agree, where they don't, and how sure each one is. Then reply to push back or dig deeper.</p></div>`;
   updateSend(); loadHistory(); ta.focus();
 }
-async function openRun(id) {
+async function openThread(id) {
   if (current?.timer) clearTimeout(current.timer);
-  current = { id, next: 0, data: null, messages: [], timer: null };
-  history.replaceState(null, "", "#" + id);
+  if (!historyItems.some((h) => h.id === id)) await loadHistory();
+  const entry = historyItems.find((h) => h.id === id);
+  const thread = entry ? entry.thread : id;
+  const ids = entry
+    ? historyItems.filter((h) => h.thread === thread).sort((a, b) => a.started - b.started).map((h) => h.id)
+    : [id];
+  current = { thread, ids, runs: Object.fromEntries(ids.map((i) => [i, { next: 0, data: null, messages: [] }])),
+              open: new Set(store.get("debateOpen", true) ? [ids.at(-1)] : []), timer: null };
+  history.replaceState(null, "", "#" + thread);
   $("#content").innerHTML = `<div class="status"><span class="spinner"></span>Loading…</div>`;
   $("#view").scrollTop = 0;
-  await poll();
-  document.querySelectorAll(".hist").forEach((x) => x.classList.toggle("active", x.dataset.id === id));
+  await poll(true);
+  document.querySelectorAll(".hist").forEach((x) => x.classList.toggle("active", x.dataset.id === thread));
+  if (ids.length > 1) document.getElementById("turn-" + ids.at(-1))?.scrollIntoView({ block: "start" });
 }
-async function poll() {
-  const run = current;
-  if (!run) return;
-  let data;
-  try { data = await api(`/api/runs/${run.id}?since=${run.next}`); }
-  catch (e) { if (run === current) $("#content").innerHTML = `<div class="card error">${esc(e.message)}</div>`; return; }
-  if (run !== current) return;
-  const wasRunning = run.data?.status === "running";
-  run.messages.push(...data.messages);
-  run.next = data.next; run.data = data;
-  renderRun();
+async function poll(all = false) {
+  const cur = current;
+  if (!cur) return;
+  const ids = all === true ? cur.ids : cur.ids.filter((id) => !cur.runs[id].data || cur.runs[id].data.status === "running");
+  let finished = null;
+  await Promise.all(ids.map(async (id) => {
+    const r = cur.runs[id];
+    try {
+      const data = await api(`/api/runs/${id}?since=${r.next}`);
+      if (r.data?.status === "running" && data.status !== "running") finished = id;
+      r.messages.push(...data.messages); r.next = data.next; r.data = data;
+    } catch (e) {
+      r.data = { status: "failed", error: e.message, question: "", participants: [] };
+    }
+  }));
+  if (cur !== current) return;
+  render();
   updateSend();
-  if (data.status === "running") run.timer = setTimeout(poll, 1500);
-  else if (wasRunning) { loadHistory(); $("#view").scrollTop = 0; }
+  if (running()) cur.timer = setTimeout(poll, 1500);
+  if (finished) {
+    loadHistory();
+    (document.getElementById("final-" + finished) || document.getElementById("turn-" + finished))
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 function consensusBadge(c) {
@@ -374,21 +424,38 @@ const confBadge = (c) => {
   return `<span class="badge ${v === "HIGH" ? "yes" : v === "MEDIUM" ? "partial" : v === "LOW" ? "no" : ""}">${esc(v.toLowerCase() || "?")} confidence</span>`;
 };
 const meaningful = (s) => s && !/^\s*(none|n\/a|-|no significant differences\.?)\s*$/i.test(String(s));
+const dropped = (d) => Object.entries(d.dropped || {}).map(([p, r]) => `${esc(who(p).name)} dropped out: ${esc(r)}`).join("<br>");
 
-function renderRun() {
-  const d = current.data, msgs = current.messages;
+function render() {
+  const view = $("#view");
+  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
+  $("#content").innerHTML = current.ids.map((id, i) => renderTurn(id, i)).join("");
+  document.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = () => {
+    const id = b.dataset.toggle, open = !current.open.has(id);
+    open ? current.open.add(id) : current.open.delete(id);
+    store.set("debateOpen", open);
+    render();
+  });
+  document.querySelectorAll("[data-jump]").forEach((b) => b.onclick = () =>
+    document.getElementById("final-" + b.dataset.jump)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  if (running() && atBottom) view.scrollTop = view.scrollHeight;
+}
+function renderTurn(id, i) {
+  const d = current.runs[id].data, msgs = current.runs[id].messages;
+  if (!d) return `<section class="turn" id="turn-${id}"><div class="status"><span class="spinner"></span>Loading…</div></section>`;
   const method = methods[d.method] || {};
-  const openDebate = store.get("debateOpen", true);
   const synth = msgs.find((m) => m.type === "SynthesisResult");
-  let html = `<h1 class="q-title">${esc(d.question)}</h1>
-    <div class="meta">${(d.participants || []).map((p) => `<span style="color:${who(p).color};font-weight:600">● ${esc(who(p).name)}</span>`).join("")}
+  let html = i === 0
+    ? `<h1 class="q-title">${esc(d.question)}</h1>`
+    : `<div class="you">You replied</div><div class="q-reply">${esc(d.question)}</div>`;
+  html += `<div class="meta">${(d.participants || []).map((p) => `<span style="color:${who(p).color};font-weight:600">● ${esc(who(p).name)}</span>`).join("")}
       ${method.name ? `<span>${esc(method.name)} discussion</span>` : ""}
       ${d.elapsed_seconds != null && d.status === "running" ? `<span>${fmtTime(d.elapsed_seconds)}</span>` : ""}</div>`;
 
   if (synth && d.status !== "running") {
     const positions = synth.positions || [];
-    html += `<div class="card final">
-      <div class="top"><h2>Final answer</h2>${consensusBadge(synth.consensus)}</div>
+    html += `<div class="card final" id="final-${id}">
+      <div class="top"><h2>${i === 0 ? "Final answer" : "Updated answer"}</h2>${consensusBadge(synth.consensus)}</div>
       <div class="md">${md(synth.synthesis)}</div>
       ${meaningful(synth.differences) ? `<div class="sub"><h3>Where they differ</h3><div class="md">${md(synth.differences)}</div></div>` : ""}
       ${positions.length ? `<div class="sub"><h3>How sure each one is</h3><div class="positions">${positions.map((p) =>
@@ -409,41 +476,34 @@ function renderRun() {
   if (d.status === "failed") {
     const stopped = d.error === "Stopped by you.";
     html += `<div class="card error"><b>${stopped ? "Stopped." : "This discussion failed."}</b> ${stopped ? "" : esc(d.error || "")}
-      ${!stopped && d.dropped && Object.keys(d.dropped).length ?`<div style="margin-top:6px">${Object.entries(d.dropped).map(([p, r]) => `${esc(who(p).name)} dropped out: ${esc(r)}`).join("<br>")}</div>` : ""}</div>`;
+      ${!stopped && dropped(d) ? `<div style="margin-top:6px">${dropped(d)}</div>` : ""}</div>`;
   }
-  if (d.status === "done" && d.dropped && Object.keys(d.dropped).length) {
-    html += `<div class="card error" style="margin-top:-12px">${Object.entries(d.dropped).map(([p, r]) => `${esc(who(p).name)} dropped out: ${esc(r)}`).join("<br>")}</div>`;
-  }
+  if (d.status === "done" && dropped(d)) html += `<div class="card error" style="margin-top:-12px">${dropped(d)}</div>`;
 
   const content = msgs.filter((m) => m.type === "PhaseMarker" || m.type === "SynthesisResult" || isContent(m));
   if (content.length) {
-    html += `<div class="debate-head"><h2>The debate</h2><button class="link-btn" id="toggleDebate">${openDebate ? "Hide" : "Show"}</button></div>
-      <div id="debate" class="${openDebate ? "" : "hidden"}">${content.map((m) => renderMsg(m, method)).join("")}</div>`;
+    const open = current.open.has(id);
+    html += `<div class="debate-head"><h2>The debate</h2><button class="link-btn" data-toggle="${id}">${open ? "Hide" : "Show"}</button></div>
+      <div class="${open ? "" : "hidden"}">${content.map((m) => renderMsg(m, method, id)).join("")}</div>`;
   }
-  const view = $("#view");
-  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
-  $("#content").innerHTML = html;
-  const tg = $("#toggleDebate");
-  if (tg) tg.onclick = () => { store.set("debateOpen", !openDebate); renderRun(); };
-  document.querySelectorAll("[data-jump]").forEach((b) => b.onclick = () => view.scrollTo({ top: 0, behavior: "smooth" }));
-  if (d.status === "running" && atBottom) view.scrollTop = view.scrollHeight;
+  return `<section class="turn" id="turn-${id}">${html}</section>`;
 }
 const isContent = (m) => ["IndependentAnswer", "CritiqueResponse", "TeamTextMessage", "FinalPosition"].includes(m.type);
 function phaseText(phase) {
   return phase.replace(/^phase (\d+)\/(\d+): (.*)$/, (_, a, b, l) => `Step ${a} of ${b}: ${prettify(l)}`);
 }
 const prettify = (s) => String(s).replace(/^phase[_ ]?/i, "").replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-function renderMsg(m, method) {
+function renderMsg(m, method, id) {
   if (m.type === "PhaseMarker") {
     const label = (method.phases || [])[m.phase - 1] || prettify(m.message_key);
     return `<div class="phase">Step ${m.phase} of ${m.total_phases} · ${esc(label)}</div>`;
   }
   if (m.type === "SynthesisResult") {
-    // The synthesis itself is the "Final answer" card at the top; point there instead of repeating it.
+    // The synthesis itself is the answer card above the debate; point there instead of repeating it.
     const s = who(m.synthesizer_model || "");
     return `<div class="card msg" style="--c:${s.color}"><div class="who" style="color:${s.color}">${whoLabel(m.synthesizer_model || "")}<span class="tag">final answer</span></div>
-      <div>Wrote the final answer from the whole debate. It's shown at the top of this page.
-      <button class="link-btn" data-jump>Jump to it ↑</button></div></div>`;
+      <div>Wrote the final answer from the whole debate. It's shown above the debate.
+      <button class="link-btn" data-jump="${id}">Jump to it ↑</button></div></div>`;
   }
   const w = who(m.source);
   let tags = "", body = "";
@@ -467,10 +527,14 @@ function renderMsg(m, method) {
 /* ---------- boot ---------- */
 $("#newBtn").onclick = () => { document.body.classList.remove("side-open"); showEmpty(); };
 $("#menuBtn").onclick = () => document.body.classList.toggle("side-open");
+window.addEventListener("hashchange", () => {
+  const id = location.hash.slice(1);
+  if (id && id !== current?.thread) openThread(id);
+});
 (async () => {
   await loadModels(false);
   const id = location.hash.slice(1);
-  if (id) { await openRun(id); loadHistory(); } else showEmpty();
+  if (id) { await loadHistory(); await openThread(id); } else showEmpty();
 })();
 </script>
 </body>

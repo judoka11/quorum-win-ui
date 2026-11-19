@@ -63,14 +63,77 @@ async def models(request: Request) -> JSONResponse:
         return _error(e, 500)
 
 
+# Follow-ups: Quorum runs one question per discussion, so a reply in a thread starts a new
+# discussion whose question carries the earlier turns (the user's messages and the group's
+# final answers; not the full debates, which would blow up the prompt).
+MAX_CONTEXT_TURNS = 6
+MAX_ANSWER_CHARS = 8000
+
+
+def _thread_id(entry: dict) -> str:
+    return entry.get("thread") or entry["id"]
+
+
+def _run_messages(run_id: str) -> list[dict]:
+    run = qm.RUNS.get(run_id)
+    if run is not None:
+        return run.messages
+    try:
+        return json.loads((qm.RUNS_DIR / f"{run_id}.json").read_text(encoding="utf-8"))["messages"]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def _chain(history: list[dict], last_id: str) -> list[dict]:
+    """The thread's turns from the first one up to and including last_id."""
+    by_id = {h["id"]: h for h in history}
+    chain, cur = [], by_id.get(last_id)
+    while cur is not None and len(chain) < 200:
+        chain.append(cur)
+        cur = by_id.get(cur.get("parent"))
+    return chain[::-1]
+
+
+def _followup_question(chain: list[dict], message: str) -> str:
+    shown = chain[-MAX_CONTEXT_TURNS:]
+    parts = ["This is a follow-up in an ongoing conversation between the user and your discussion "
+             "group. The earlier turns are below, each with the final answer your group gave."]
+    if len(chain) > len(shown):
+        parts.append(f"({len(chain) - len(shown)} earlier turns are left out.)")
+    for n, h in enumerate(shown, len(chain) - len(shown) + 1):
+        synth = next((m for m in _run_messages(h["id"]) if m.get("type") == "SynthesisResult"), None)
+        answer = (synth or {}).get("synthesis") or "(No final answer: that discussion did not finish.)"
+        if len(answer) > MAX_ANSWER_CHARS:
+            answer = answer[:MAX_ANSWER_CHARS] + "\n[…]"
+        parts.append(f"### Turn {n}: the user wrote\n{h['question']}\n\n### Turn {n}: your group's final answer\n{answer}")
+    parts.append(
+        f"### Now the user writes\n{message}\n\n"
+        "Respond to this new message. If it is feedback, use it: correct or revise the earlier answer "
+        "where it asks for that and keep what still holds. If it is a new question, answer it in the "
+        "context of this conversation. Reply in the language of the user's messages."
+    )
+    return "\n\n".join(parts)
+
+
 async def start_run(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except ValueError:  # includes undecodable (non-UTF-8) bodies
         return _error(ValueError("The request is not valid UTF-8 JSON."))
-    question = str(body.get("question") or "").strip()
-    if not question:
+    message = str(body.get("question") or "").strip()
+    if not message:
         return _error(ValueError("Type a question first."))
+    history = _load_history()
+    parent_id = body.get("parent_id")
+    question, extra = message, {}
+    if parent_id:
+        chain = _chain(history, parent_id)
+        if not chain:
+            return _error(ValueError("The discussion you are replying to no longer exists."))
+        if any(qm.RUNS.get(h["id"]) and qm.RUNS[h["id"]].status == "running" for h in chain):
+            return _error(ValueError("Wait for the current answer before replying."))
+        question = _followup_question(chain, message)
+        extra = {"parent": parent_id, "thread": _thread_id(chain[0])}
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     try:
         res = await qm._start({
@@ -82,9 +145,9 @@ async def start_run(request: Request) -> JSONResponse:
     except Exception as e:
         return _error(e)
     history = _load_history()
-    history.insert(0, {"id": res["run_id"], "question": question, "method": res["method"],
-                       "participants": res["participants"], "started": time.time()})
-    _save_history(history[:500])
+    history.insert(0, {"id": res["run_id"], "question": message, "method": res["method"],
+                       "participants": res["participants"], "started": time.time(), **extra})
+    _save_history(history[:1000])
     return JSONResponse(res)
 
 
@@ -128,18 +191,24 @@ async def history(_: Request) -> JSONResponse:
     for h in items:
         run = qm.RUNS.get(h["id"])
         h["running"] = bool(run and run.status == "running")
+        h["thread"] = _thread_id(h)
     return JSONResponse(items)
 
 
 async def delete_history(request: Request) -> JSONResponse:
+    """Delete a whole thread (the id may be any turn in it)."""
     run_id = request.path_params["run_id"]
-    run = qm.RUNS.get(run_id)
-    if run and run.status == "running":
+    history = _load_history()
+    entry = next((h for h in history if h["id"] == run_id), None)
+    thread = _thread_id(entry) if entry else run_id
+    ids = {h["id"] for h in history if _thread_id(h) == thread} | {run_id}
+    if any(qm.RUNS.get(i) and qm.RUNS[i].status == "running" for i in ids):
         return _error(ValueError("Stop the discussion before deleting it."))
-    _save_history([h for h in _load_history() if h["id"] != run_id])
-    (qm.RUNS_DIR / f"{run_id}.json").unlink(missing_ok=True)
-    qm.RUNS.pop(run_id, None)
-    return JSONResponse({"status": "deleted"})
+    _save_history([h for h in history if h["id"] not in ids])
+    for i in ids:
+        (qm.RUNS_DIR / f"{i}.json").unlink(missing_ok=True)
+        qm.RUNS.pop(i, None)
+    return JSONResponse({"status": "deleted", "deleted": sorted(ids)})
 
 
 app = Starlette(routes=[
