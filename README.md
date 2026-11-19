@@ -1,5 +1,31 @@
 # Quorum
 
+> **This fork: Quorum Win UI.** A local browser UI for Quorum that runs on Windows. Ask Claude
+> and ChatGPT (plus Gemini/Grok if their CLIs are set up) a question, watch them answer, critique
+> each other and discuss, then read one final answer with where they agree, where they differ and
+> how confident each one is. It runs on your own **Claude and ChatGPT subscriptions** through the
+> `claude` and `codex` CLIs, with no API keys. Based on [Detrol/quorum-cli](https://github.com/Detrol/quorum-cli).
+>
+> **Setup (Windows):**
+> 1. Install Python 3.11+ and Node.js 18+.
+> 2. `npm install -g @anthropic-ai/claude-code @openai/codex`, then sign in once with `claude` and `codex login`.
+> 3. Double-click **`Quorum Web.bat`**. The first run sets up an environment in `%USERPROFILE%\.quorum\web-venv`,
+>    then your browser opens at http://127.0.0.1:8765 (localhost only). Close the window to stop it.
+>
+> **What's different from upstream:**
+> - `webui/`: the browser UI (`index.html`) and a small local server (`server.py`) on top of the same
+>   discussion engine the Claude Code/Codex plugin uses. History is kept in `~/.quorum/`.
+> - `src/quorum/clients/agent_cli.py`: Windows fixes. Agent CLIs are started directly instead of
+>   through npm `.cmd` shims, process trees are killed with `taskkill`, logins are copied when symlinks
+>   aren't allowed, and CLI output is read as UTF-8.
+> - Participants run read-only (web search allowed) in an empty folder, `~/.quorum/web-workdir`.
+>
+> Each debate uses several messages from each subscription (about 10 per AI for the Standard style).
+> Licensed under the original BSL 1.1 (see [LICENSE](LICENSE)): personal and internal use is fine,
+> offering it as a commercial hosted service is not.
+
+---
+
 <p align="center">
   <img src="docs/demo.gif" alt="Quorum - AI models debating in terminal" width="700">
 </p>

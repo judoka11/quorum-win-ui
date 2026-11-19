@@ -173,7 +173,12 @@ def _sync_login(real: Path, link: Path) -> None:
         link.unlink()
     if real.exists() and not link.is_symlink():
         link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(real)
+        try:
+            link.symlink_to(real)
+        except OSError:
+            # Windows without Developer Mode cannot create symlinks: use a copy. A refreshed
+            # token written to the copy is newer than the real file and is copied back above.
+            shutil.copy2(real, link)
 
 
 def _login_files() -> list[tuple[Path, Path]]:
@@ -243,10 +248,40 @@ def _base_env() -> dict[str, str]:
 # ─────────────────────────────────────────────────────────────
 
 
+IS_WINDOWS = os.name == "nt"
+_NPM_SHIM_TARGET = re.compile(r'"%dp0%\\([^"]+\.(?:exe|js))"', re.I)
+
+
+def _resolve_exe(name: str) -> list[str]:
+    """argv prefix that starts `name`. On Windows, npm installs `.cmd` shims, which cannot be
+    started without cmd.exe (and cmd.exe mangles arguments), so run the shim's target directly."""
+    path = shutil.which(name)
+    if not IS_WINDOWS or path is None or not path.lower().endswith((".cmd", ".bat")):
+        return [path or name]
+    targets = _NPM_SHIM_TARGET.findall(Path(path).read_text(errors="replace"))
+    if not targets:
+        return [path]
+    target = Path(path).parent / targets[-1]
+    if target.suffix.lower() == ".js":
+        return [shutil.which("node") or "node", str(target)]
+    return [str(target)]
+
+
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    if IS_WINDOWS:
+        import subprocess
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        with suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+
+
 async def _run(
     cmd: list[str], env: dict[str, str], cwd: str, stdin: str | None = None, timeout: float | None = None
 ) -> tuple[int, str, str]:
     """Run a command; kill its whole process group on timeout or cancellation."""
+    cmd = _resolve_exe(cmd[0]) + cmd[1:]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
@@ -254,15 +289,14 @@ async def _run(
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
+        start_new_session=not IS_WINDOWS,
     )
     try:
         out, err = await asyncio.wait_for(
             proc.communicate(stdin.encode() if stdin is not None else None), timeout
         )
     except BaseException:
-        with suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
+        _kill_tree(proc)
         with suppress(BaseException):
             await asyncio.shield(proc.wait())
         raise
@@ -311,7 +345,7 @@ async def call_participant(
         env["CODEX_HOME"] = str(_codex_home())
         try:
             code, out, err = await _run(cmd, env, cwd, stdin=prompt, timeout=timeout)
-            reply = out_file.read_text() if out_file.exists() else ""
+            reply = out_file.read_text(encoding="utf-8", errors="replace") if out_file.exists() else ""
         finally:
             out_file.unlink(missing_ok=True)
         if code or not reply.strip():
@@ -321,7 +355,7 @@ async def call_participant(
     if p.agent == "grok":
         env = _grok_env()
         prompt_file = HOMES_DIR / "grok" / f"prompt-{uuid.uuid4().hex}.md"
-        prompt_file.write_text(prompt)
+        prompt_file.write_text(prompt, encoding="utf-8")
         cmd = ["grok", "--prompt-file", str(prompt_file), "--model", p.model, "--tools", GROK_TOOLS,
                "--no-subagents", "--output-format", "json"]
         for rule in GROK_ALLOW:
@@ -348,7 +382,7 @@ async def call_participant(
     cmd = ["agy", "--model", model, "--sandbox", "--add-dir", cwd, "--output-format", "json"]
     if len(prompt.encode()) > AGY_MAX_ARG:
         prompt_file = home / f"prompt-{uuid.uuid4().hex}.md"
-        prompt_file.write_text(prompt)
+        prompt_file.write_text(prompt, encoding="utf-8")
         cmd += ["--add-dir", str(home)]
         prompt = f"Read your full instructions from {prompt_file} and follow them exactly."
     cmd.append(f"--print={prompt}")

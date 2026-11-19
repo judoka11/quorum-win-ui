@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quorum</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root {
+  --bg: #f7f6f3; --panel: #ffffff; --side: #efede8; --ink: #1d1c1a; --muted: #6d6a64;
+  --line: #e2dfd8; --accent: #3a5bd9; --accent-ink: #fff; --chip: #f2f0eb;
+  --ok: #1f8a4c; --ok-bg: #e3f4ea; --warn: #9a6400; --warn-bg: #fbf0d9; --bad: #b3261e; --bad-bg: #fbe4e2;
+  --claude: #c8643f; --codex: #10a37f; --agy: #3b78e7; --grok: #6b6b6b; --other: #7a5bc7;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a19; --panel: #232322; --side: #151514; --ink: #ecebe8; --muted: #9c9a94;
+    --line: #34332f; --accent: #7d97ff; --accent-ink: #10131f; --chip: #2c2b29;
+    --ok: #5fd08f; --ok-bg: #173323; --warn: #f0b955; --warn-bg: #3a2c12; --bad: #ff8a80; --bad-bg: #3d1a18;
+    --claude: #e58a63; --codex: #3ccf9f; --agy: #7aa7ff; --grok: #b0b0b0; --other: #b39cff;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: grid; grid-template-columns: 260px 1fr; }
+button, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+/* Sidebar */
+aside { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { padding: 18px 18px 10px; font-weight: 700; font-size: 18px; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+.brand .dots { display: inline-flex; gap: 3px; }
+.brand .dots i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+.new-btn { margin: 4px 14px 12px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+  text-align: left; font-weight: 600; }
+.new-btn:hover { border-color: var(--accent); }
+.hist-label { padding: 6px 18px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+#history { overflow-y: auto; padding: 0 8px 16px; flex: 1; }
+.hist { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--ink); }
+.hist:hover { background: var(--chip); }
+.hist.active { background: var(--panel); box-shadow: var(--shadow); }
+.hist .q { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.hist .del { opacity: 0; border: 0; background: none; color: var(--muted); padding: 0 4px; font-size: 16px; }
+.hist:hover .del { opacity: 1; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; flex: none; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* Main */
+main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+#view { flex: 1; overflow-y: auto; padding: 28px 16px 24px; }
+.wrap { max-width: 860px; margin: 0 auto; }
+.empty { text-align: center; margin-top: 12vh; color: var(--muted); }
+.empty h1 { color: var(--ink); font-size: 28px; letter-spacing: -.02em; margin: 0 0 8px; }
+.empty p { margin: 4px 0; }
+.q-title { font-size: 22px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 18px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); }
+.final { border-width: 2px; border-color: var(--accent); margin-bottom: 26px; }
+.final h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.final .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.badge { font-size: 12.5px; font-weight: 650; padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+.badge.yes { background: var(--ok-bg); color: var(--ok); }
+.badge.partial { background: var(--warn-bg); color: var(--warn); }
+.badge.no { background: var(--bad-bg); color: var(--bad); }
+.sub { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.sub h3 { margin: 0 0 4px; font-size: 14px; }
+.positions { display: grid; gap: 8px; }
+.pos { display: flex; gap: 10px; align-items: baseline; font-size: 14px; }
+.foot { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+
+.status { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+.spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.thinking { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--chip); display: inline-flex; align-items: center; gap: 6px; }
+.error { background: var(--bad-bg); color: var(--bad); border-color: transparent; margin-bottom: 22px; }
+
+.debate-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 10px; }
+.debate-head h2 { font-size: 15px; margin: 0; }
+.link-btn { border: 0; background: none; color: var(--accent); padding: 0; font-size: 13.5px; }
+.phase { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; text-transform: uppercase;
+  letter-spacing: .07em; margin: 22px 0 10px; }
+.phase::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.msg { margin-bottom: 12px; border-left: 4px solid var(--c, var(--other)); }
+.msg .who { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14px; margin-bottom: 4px; flex-wrap: wrap; }
+.msg .who small { font-weight: 500; color: var(--muted); }
+.tag { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+.crit h4 { margin: 10px 0 2px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.md { overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 4px; }
+.md pre { background: var(--chip); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+.md code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+.md pre code { background: none; padding: 0; }
+.md a { color: var(--accent); }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; }
+.hidden { display: none !important; }
+
+/* Composer */
+.composer { border-top: 1px solid var(--line); background: var(--bg); padding: 12px 16px 16px; }
+.settings { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 999px; background: var(--panel);
+  border: 1px solid var(--line); font-size: 13.5px; }
+.chip.off { opacity: .55; }
+.chip label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }
+.chip input { accent-color: var(--c, var(--accent)); margin: 0; }
+.chip .sw { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--other)); }
+.chip select, .opt select { border: 0; background: var(--chip); border-radius: 999px; padding: 2px 6px; font-size: 13px; max-width: 150px; }
+.opt { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.unavail { font-size: 12px; color: var(--muted); }
+.box { display: flex; gap: 8px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; box-shadow: var(--shadow); }
+.box:focus-within { border-color: var(--accent); }
+textarea { flex: 1; border: 0; outline: 0; background: transparent; resize: none; min-height: 26px; max-height: 220px; padding: 6px 0; }
+.send { border: 0; border-radius: 10px; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); font-weight: 650; }
+.send:disabled { opacity: .45; cursor: default; }
+.stop { background: var(--bad); color: #fff; }
+.hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.toast { position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 9px 16px;
+  border-radius: 10px; font-size: 14px; max-width: min(90vw, 640px); z-index: 5; }
+.menu-btn { display: none; }
+
+@media (max-width: 800px) {
+  body { grid-template-columns: 1fr; }
+  aside { position: fixed; inset: 0 auto 0 0; width: 270px; z-index: 4; transform: translateX(-100%); transition: transform .2s; }
+  body.side-open aside { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.3); }
+  .menu-btn { display: inline-block; position: fixed; top: 10px; left: 10px; z-index: 3; border: 1px solid var(--line);
+    background: var(--panel); border-radius: 8px; padding: 4px 10px; }
+  #view { padding-top: 52px; }
+}
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><span class="dots"><i style="background:var(--claude)"></i><i style="background:var(--codex)"></i></span>Quorum</div>
+  <button class="new-btn" id="newBtn">＋ New question</button>
+  <div class="hist-label">History</div>
+  <div id="history"></div>
+</aside>
+<main>
+  <button class="menu-btn" id="menuBtn" aria-label="History">☰</button>
+  <div id="view"><div class="wrap" id="content"></div></div>
+  <div class="composer">
+    <div class="wrap">
+      <div class="settings" id="settings"><span class="unavail">Checking which AIs are available…</span></div>
+      <div class="box">
+        <textarea id="q" rows="1" placeholder="Ask something. They'll answer, critique each other and agree on a final answer…"></textarea>
+        <button class="send" id="sendBtn" disabled>Ask</button>
+      </div>
+      <div class="hint">Enter to send · Shift+Enter for a new line · runs on your own Claude and ChatGPT subscriptions</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const NAMES = { claude: "Claude", codex: "ChatGPT", agy: "Gemini", grok: "Grok", openai: "OpenAI API", anthropic: "Anthropic API",
+  google: "Google API", xai: "xAI API", openrouter: "OpenRouter", ollama: "Ollama", lmstudio: "LM Studio", llamaswap: "llama-swap", custom: "Custom" };
+const COLORS = { claude: "var(--claude)", codex: "var(--codex)", agy: "var(--agy)", grok: "var(--grok)" };
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const md = (s) => {
+  s = String(s ?? "");
+  if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(s));
+  return esc(s).replace(/\n/g, "<br>");
+};
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("quorum." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("quorum." + k, JSON.stringify(v)); } catch {} },
+};
+
+let catalog = null, methods = {};
+let cfg = store.get("cfg", { on: {}, model: {}, effort: {}, method: "standard", synth: "claude" });
+let current = null;   // { id, next, data, messages, timer }
+
+function who(id) {
+  const i = String(id).indexOf(":");
+  const prov = i > 0 ? id.slice(0, i) : "other";
+  const [model, effort] = (i > 0 ? id.slice(i + 1) : id).split("@");
+  return { prov, model, effort, name: NAMES[prov] || prov, color: COLORS[prov] || "var(--other)" };
+}
+const whoLabel = (id) => { const w = who(id); return `${esc(w.name)} <small>${esc(w.model)}${w.effort ? " · " + esc(w.effort) : ""}</small>`; };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 6000);
+}
+
+/* ---------- settings bar ---------- */
+function available() {
+  return Object.entries(catalog || {}).filter(([, e]) => e.status === "ok" && e.models?.length);
+}
+function defaultModel(entry) {
+  return (entry.models.find((m) => m.role === "workhorse") || entry.models[0]).model;
+}
+function participants() {
+  const ids = [];
+  for (const [prov, e] of available()) {
+    if (!cfg.on[prov]) continue;
+    const model = e.models.some((m) => m.model === cfg.model[prov]) ? cfg.model[prov] : defaultModel(e);
+    const effort = cfg.effort[prov];
+    ids.push(`${prov}:${model}${effort ? "@" + effort : ""}`);
+  }
+  // The first participant writes the final answer.
+  ids.sort((a, b) => (who(b).prov === cfg.synth) - (who(a).prov === cfg.synth));
+  return ids;
+}
+function renderSettings() {
+  const el = $("#settings");
+  const avail = available();
+  if (!avail.length) {
+    el.innerHTML = `<span class="unavail">No AI is ready. Install and sign in to <b>claude</b> and/or <b>codex</b>, then
+      <button class="link-btn" id="refresh">check again</button>.</span>`;
+    $("#refresh").onclick = () => loadModels(true);
+    updateSend(); return;
+  }
+  let html = "";
+  for (const [prov, e] of avail) {
+    if (cfg.on[prov] === undefined) cfg.on[prov] = ["claude", "codex"].includes(prov) || avail.length <= 2;
+    const model = e.models.some((m) => m.model === cfg.model[prov]) ? cfg.model[prov] : defaultModel(e);
+    cfg.model[prov] = model;
+    const m = e.models.find((x) => x.model === model);
+    const efforts = m.efforts?.length ? m.efforts : [];
+    if (cfg.effort[prov] && !efforts.includes(cfg.effort[prov])) cfg.effort[prov] = undefined;
+    if (!cfg.effort[prov] && efforts.length) cfg.effort[prov] = efforts.includes("medium") ? "medium" : (m.default_effort || efforts[0]);
+    html += `<span class="chip ${cfg.on[prov] ? "" : "off"}" style="--c:${COLORS[prov] || "var(--other)"}">
+      <label><input type="checkbox" data-on="${prov}" ${cfg.on[prov] ? "checked" : ""}><span class="sw"></span>${esc(NAMES[prov] || prov)}</label>
+      <select data-model="${prov}" title="Model">${e.models.map((x) =>
+        `<option value="${esc(x.model)}" ${x.model === model ? "selected" : ""} title="${esc(x.description)}">${esc(x.model)}${x.role ? " (" + x.role + ")" : ""}</option>`).join("")}</select>
+      ${efforts.length ? `<select data-effort="${prov}" title="Thinking effort">${efforts.map((x) =>
+        `<option ${x === cfg.effort[prov] ? "selected" : ""}>${x}</option>`).join("")}</select>` : ""}
+    </span>`;
+  }
+  const n = participants().length;
+  html += `<span class="opt">Style <select id="method">${Object.entries(methods).map(([k, m]) => {
+    const need = k === "advocate" || k === "delphi" ? 3 : 2;
+    const bad = n < need || (k === "oxford" && n % 2);
+    return `<option value="${k}" ${k === cfg.method ? "selected" : ""} ${bad ? "disabled" : ""} title="${esc(m.best_for)}">${esc(m.name)} – ${esc(m.description)}${bad ? " (" + esc(m.requires || "") + ")" : ""}</option>`;
+  }).join("")}</select></span>`;
+  const on = avail.filter(([p]) => cfg.on[p]);
+  if (!on.some(([p]) => p === cfg.synth) && on.length) cfg.synth = on[0][0];
+  if (on.length > 1) html += `<span class="opt">Final answer by <select id="synth">${on.map(([p]) =>
+    `<option value="${p}" ${p === cfg.synth ? "selected" : ""}>${esc(NAMES[p] || p)}</option>`).join("")}</select></span>`;
+  const missing = Object.entries(catalog).filter(([p, e]) => e.status !== "ok" && ["claude", "codex", "agy", "grok"].includes(p));
+  if (missing.length) html += `<span class="unavail" title="${esc(missing.map(([p, e]) => `${NAMES[p]}: ${e.detail}`).join("\n"))}">
+    Not set up: ${missing.map(([p]) => esc(NAMES[p] || p)).join(", ")}</span>`;
+  el.innerHTML = html;
+
+  el.querySelectorAll("[data-on]").forEach((x) => x.onchange = () => { cfg.on[x.dataset.on] = x.checked; saveCfg(); });
+  el.querySelectorAll("[data-model]").forEach((x) => x.onchange = () => { cfg.model[x.dataset.model] = x.value; cfg.effort[x.dataset.model] = undefined; saveCfg(); });
+  el.querySelectorAll("[data-effort]").forEach((x) => x.onchange = () => { cfg.effort[x.dataset.effort] = x.value; saveCfg(); });
+  $("#method").onchange = (ev) => { cfg.method = ev.target.value; saveCfg(); };
+  if ($("#synth")) $("#synth").onchange = (ev) => { cfg.synth = ev.target.value; saveCfg(); };
+  // Fall back to standard if the chosen style no longer fits the lineup.
+  const sel = $("#method");
+  if (sel.selectedOptions[0]?.disabled) { cfg.method = "standard"; sel.value = "standard"; }
+  updateSend();
+}
+function saveCfg() { store.set("cfg", cfg); renderSettings(); }
+async function loadModels(refresh) {
+  $("#settings").innerHTML = `<span class="unavail"><span class="spinner" style="display:inline-block;vertical-align:-3px"></span> Checking which AIs are available…</span>`;
+  try {
+    const res = await api("/api/models" + (refresh ? "?refresh=1" : ""));
+    catalog = res.providers; methods = res.methods;
+  } catch (e) { catalog = {}; toast("Could not list models: " + e.message); }
+  renderSettings();
+}
+
+/* ---------- composer ---------- */
+const ta = $("#q");
+function running() { return current?.data?.status === "running"; }
+function updateSend() {
+  const btn = $("#sendBtn");
+  if (running()) { btn.textContent = "Stop"; btn.classList.add("stop"); btn.disabled = false; return; }
+  btn.textContent = "Ask"; btn.classList.remove("stop");
+  btn.disabled = !ta.value.trim() || participants().length < 2;
+  btn.title = participants().length < 2 ? "Turn on at least two AIs" : "";
+}
+ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; updateSend(); });
+ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!$("#sendBtn").disabled && !running()) ask(); } });
+$("#sendBtn").onclick = () => running() ? stop() : ask();
+
+async function ask() {
+  const question = ta.value.trim();
+  if (!question) return;
+  $("#sendBtn").disabled = true;
+  try {
+    const res = await api("/api/runs", { method: "POST", body: JSON.stringify({ question, participants: participants(), method: cfg.method }) });
+    ta.value = ""; ta.style.height = "auto";
+    await openRun(res.run_id);
+    loadHistory();
+  } catch (e) { toast(e.message); updateSend(); }
+}
+async function stop() {
+  try { await api(`/api/runs/${current.id}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
+}
+
+/* ---------- history ---------- */
+async function loadHistory() {
+  let items = [];
+  try { items = await api("/api/history"); } catch {}
+  $("#history").innerHTML = items.length ? items.map((h) => `
+    <div class="hist ${current?.id === h.id ? "active" : ""}" data-id="${h.id}" title="${esc(h.question)}">
+      ${h.running ? '<span class="live-dot"></span>' : ""}<span class="q">${esc(h.question)}</span>
+      <button class="del" data-del="${h.id}" title="Delete">×</button></div>`).join("")
+    : `<div class="hist-label" style="text-transform:none;letter-spacing:0">Nothing yet.</div>`;
+  $("#history").querySelectorAll(".hist").forEach((x) => x.onclick = (e) => {
+    if (e.target.dataset.del) return;
+    document.body.classList.remove("side-open"); openRun(x.dataset.id);
+  });
+  $("#history").querySelectorAll("[data-del]").forEach((x) => x.onclick = async () => {
+    if (!confirm("Delete this discussion?")) return;
+    try { await api(`/api/history/${x.dataset.del}`, { method: "DELETE" }); } catch (e) { return toast(e.message); }
+    if (current?.id === x.dataset.del) showEmpty();
+    loadHistory();
+  });
+}
+
+/* ---------- run view ---------- */
+function showEmpty() {
+  if (current?.timer) clearTimeout(current.timer);
+  current = null;
+  history.replaceState(null, "", "#");
+  $("#content").innerHTML = `<div class="empty"><h1>Ask your AIs together</h1>
+    <p>Each one answers on its own first, then they critique each other, discuss, and agree on one final answer.</p>
+    <p>You'll see where they agree, where they don't, and how sure each one is.</p></div>`;
+  updateSend(); loadHistory(); ta.focus();
+}
+async function openRun(id) {
+  if (current?.timer) clearTimeout(current.timer);
+  current = { id, next: 0, data: null, messages: [], timer: null };
+  history.replaceState(null, "", "#" + id);
+  $("#content").innerHTML = `<div class="status"><span class="spinner"></span>Loading…</div>`;
+  $("#view").scrollTop = 0;
+  await poll();
+  document.querySelectorAll(".hist").forEach((x) => x.classList.toggle("active", x.dataset.id === id));
+}
+async function poll() {
+  const run = current;
+  if (!run) return;
+  let data;
+  try { data = await api(`/api/runs/${run.id}?since=${run.next}`); }
+  catch (e) { if (run === current) $("#content").innerHTML = `<div class="card error">${esc(e.message)}</div>`; return; }
+  if (run !== current) return;
+  const wasRunning = run.data?.status === "running";
+  run.messages.push(...data.messages);
+  run.next = data.next; run.data = data;
+  renderRun();
+  updateSend();
+  if (data.status === "running") run.timer = setTimeout(poll, 1500);
+  else if (wasRunning) { loadHistory(); $("#view").scrollTop = 0; }
+}
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+function consensusBadge(c) {
+  const v = String(c || "").toUpperCase();
+  if (v === "YES") return `<span class="badge yes">They agree</span>`;
+  if (v === "PARTIAL") return `<span class="badge partial">Partly agree</span>`;
+  if (v === "NO") return `<span class="badge no">They disagree</span>`;
+  return v ? `<span class="badge">${esc(v.replace(/_/g, " ").toLowerCase())}</span>` : "";
+}
+const confBadge = (c) => {
+  const v = String(c || "").toUpperCase();
+  return `<span class="badge ${v === "HIGH" ? "yes" : v === "MEDIUM" ? "partial" : v === "LOW" ? "no" : ""}">${esc(v.toLowerCase() || "?")} confidence</span>`;
+};
+const meaningful = (s) => s && !/^\s*(none|n\/a|-|no significant differences\.?)\s*$/i.test(String(s));
+
+function renderRun() {
+  const d = current.data, msgs = current.messages;
+  const method = methods[d.method] || {};
+  const openDebate = store.get("debateOpen", true);
+  const synth = msgs.find((m) => m.type === "SynthesisResult");
+  let html = `<h1 class="q-title">${esc(d.question)}</h1>
+    <div class="meta">${(d.participants || []).map((p) => `<span style="color:${who(p).color};font-weight:600">● ${esc(who(p).name)}</span>`).join("")}
+      ${method.name ? `<span>${esc(method.name)} discussion</span>` : ""}
+      ${d.elapsed_seconds != null && d.status === "running" ? `<span>${fmtTime(d.elapsed_seconds)}</span>` : ""}</div>`;
+
+  if (synth && d.status !== "running") {
+    const positions = synth.positions || [];
+    html += `<div class="card final">
+      <div class="top"><h2>Final answer</h2>${consensusBadge(synth.consensus)}</div>
+      <div class="md">${md(synth.synthesis)}</div>
+      ${meaningful(synth.differences) ? `<div class="sub"><h3>Where they differ</h3><div class="md">${md(synth.differences)}</div></div>` : ""}
+      ${positions.length ? `<div class="sub"><h3>How sure each one is</h3><div class="positions">${positions.map((p) =>
+        `<div class="pos"><b style="color:${who(p.source).color}">${esc(who(p.source).name)}</b>${confBadge(p.confidence)}</div>`).join("")}</div></div>` : ""}
+      ${synth.synthesizer_model ? `<div class="foot">Written up by ${esc(who(synth.synthesizer_model).name)} after ${msgs.filter(isContent).length} messages.</div>` : ""}
+    </div>`;
+  }
+  if (d.status === "running") {
+    const thinking = new Set();
+    for (const m of msgs) {
+      if (m.type === "ThinkingIndicator") thinking.add(m.model);
+      if (m.type === "ThinkingComplete") thinking.delete(m.model);
+      if (isContent(m) || m.type === "PhaseMarker") m.type === "PhaseMarker" ? thinking.clear() : thinking.delete(m.source);
+    }
+    html += `<div class="status"><span class="spinner"></span><span>${esc(d.phase && d.phase !== "starting" ? phaseText(d.phase) : "Starting…")}</span>
+      ${[...thinking].map((t) => `<span class="thinking" style="color:${who(t).color}">● ${esc(who(t).name)} is thinking…</span>`).join("")}</div>`;
+  }
+  if (d.status === "failed") {
+    const stopped = d.error === "Stopped by you.";
+    html += `<div class="card error"><b>${stopped ? "Stopped." : "This discussion failed."}</b> ${stopped ? "" : esc(d.error || "")}
+      ${!stopped && d.dropped && Object.keys(d.dropped).length ?`<div style="margin-top:6px">${Object.entries(d.dropped).map(([p, r]) => `${esc(who(p).name)} dropped out: ${esc(r)}`).join("<br>")}</div>` : ""}</div>`;
+  }
+  if (d.status === "done" && d.dropped && Object.keys(d.dropped).length) {
+    html += `<div class="card error" style="margin-top:-12px">${Object.entries(d.dropped).map(([p, r]) => `${esc(who(p).name)} dropped out: ${esc(r)}`).join("<br>")}</div>`;
+  }
+
+  const content = msgs.filter((m) => m.type === "PhaseMarker" || isContent(m));
+  if (content.length) {
+    html += `<div class="debate-head"><h2>The debate</h2><button class="link-btn" id="toggleDebate">${openDebate ? "Hide" : "Show"}</button></div>
+      <div id="debate" class="${openDebate ? "" : "hidden"}">${content.map((m) => renderMsg(m, method)).join("")}</div>`;
+  }
+  const view = $("#view");
+  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
+  $("#content").innerHTML = html;
+  const tg = $("#toggleDebate");
+  if (tg) tg.onclick = () => { store.set("debateOpen", !openDebate); renderRun(); };
+  if (d.status === "running" && atBottom) view.scrollTop = view.scrollHeight;
+}
+const isContent = (m) => ["IndependentAnswer", "CritiqueResponse", "TeamTextMessage", "FinalPosition"].includes(m.type);
+function phaseText(phase) {
+  return phase.replace(/^phase (\d+)\/(\d+): (.*)$/, (_, a, b, l) => `Step ${a} of ${b}: ${prettify(l)}`);
+}
+const prettify = (s) => String(s).replace(/^phase[_ ]?/i, "").replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+function renderMsg(m, method) {
+  if (m.type === "PhaseMarker") {
+    const label = (method.phases || [])[m.phase - 1] || prettify(m.message_key);
+    return `<div class="phase">Step ${m.phase} of ${m.total_phases} · ${esc(label)}</div>`;
+  }
+  const w = who(m.source);
+  let tags = "", body = "";
+  if (m.type === "IndependentAnswer") body = md(m.content);
+  else if (m.type === "TeamTextMessage") {
+    if (m.role) tags += `<span class="tag">${esc(prettify(m.role))}</span>`;
+    if (m.round_type) tags += `<span class="tag">${esc(prettify(m.round_type))}</span>`;
+    body = md(m.content);
+  } else if (m.type === "CritiqueResponse") {
+    const parts = [["Agrees with", m.agreements], ["Disagrees with", m.disagreements], ["Missing", m.missing]].filter(([, v]) => meaningful(v));
+    body = parts.length ? `<div class="crit">${parts.map(([h, v]) => `<h4>${h}</h4><div class="md">${md(v)}</div>`).join("")}</div>` : md(m.raw_content);
+    tags += `<span class="tag">critique</span>`;
+  } else if (m.type === "FinalPosition") {
+    tags += confBadge(m.confidence);
+    body = md(m.position);
+  }
+  return `<div class="card msg" style="--c:${w.color}"><div class="who" style="color:${w.color}">${whoLabel(m.source)}${tags}</div>
+    <div class="md">${body}</div></div>`;
+}
+
+/* ---------- boot ---------- */
+$("#newBtn").onclick = () => { document.body.classList.remove("side-open"); showEmpty(); };
+$("#menuBtn").onclick = () => document.body.classList.toggle("side-open");
+(async () => {
+  await loadModels(false);
+  const id = location.hash.slice(1);
+  if (id) { await openRun(id); loadHistory(); } else showEmpty();
+})();
+</script>
+</body>
+</html>
