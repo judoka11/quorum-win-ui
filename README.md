@@ -12,12 +12,23 @@
 > 3. Double-click **`Quorum Web.bat`**. The first run sets up an environment in `%USERPROFILE%\.quorum\web-venv`,
 >    then your browser opens at http://127.0.0.1:8765 (localhost only). Close the window to stop it.
 >
+> **Or run it in Docker** (only Docker Desktop is needed; no Python, Node or CLIs on your PC):
+> 1. Double-click **`Quorum Docker.bat`**, or run `docker compose up -d --build`.
+> 2. Sign in once inside the container. These logins are separate from the ones on your PC and are
+>    kept in the `quorum-home` volume, along with your history:
+>    - `docker compose exec -it quorum claude auth login`: open the link, approve, and paste the code back.
+>    - `docker compose exec -it quorum codex login --device-auth`: open the link and enter the code.
+> 3. Open http://127.0.0.1:8765 and click **↻ check again**. The container starts with Docker Desktop
+>    until you run `docker compose down`.
+>
 > **What's different from upstream:**
 > - `webui/`: the browser UI (`index.html`) and a small local server (`server.py`) on top of the same
 >   discussion engine the Claude Code/Codex plugin uses. History is kept in `~/.quorum/`.
 > - `src/quorum/clients/agent_cli.py`: Windows fixes. Agent CLIs are started directly instead of
 >   through npm `.cmd` shims, process trees are killed with `taskkill`, logins are copied when symlinks
 >   aren't allowed, and CLI output is read as UTF-8.
+> - `Dockerfile`, `docker-compose.yml`, `Quorum Docker.bat`: the container setup (Linux, so the
+>   upstream agent code runs unchanged there; it listens on 127.0.0.1 only).
 > - Participants run read-only (web search allowed) in an empty folder, `~/.quorum/web-workdir`.
 >
 > Each debate uses several messages from each subscription (about 10 per AI for the Standard style).

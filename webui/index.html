@@ -253,7 +253,9 @@ function renderSettings() {
   const missing = Object.entries(catalog).filter(([p, e]) => e.status !== "ok" && ["claude", "codex", "agy", "grok"].includes(p));
   if (missing.length) html += `<span class="unavail" title="${esc(missing.map(([p, e]) => `${NAMES[p]}: ${e.detail}`).join("\n"))}">
     Not set up: ${missing.map(([p]) => esc(NAMES[p] || p)).join(", ")}</span>`;
+  html += `<button class="link-btn" id="refresh" style="font-size:12px" title="Check again which AIs are installed and signed in">↻ check again</button>`;
   el.innerHTML = html;
+  $("#refresh").onclick = () => loadModels(true);
 
   el.querySelectorAll("[data-on]").forEach((x) => x.onchange = () => { cfg.on[x.dataset.on] = x.checked; saveCfg(); });
   el.querySelectorAll("[data-model]").forEach((x) => x.onchange = () => { cfg.model[x.dataset.model] = x.value; cfg.effort[x.dataset.model] = undefined; saveCfg(); });

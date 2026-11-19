@@ -1,0 +1,15 @@
+services:
+  quorum:
+    build: .
+    image: quorum-win-ui
+    container_name: quorum-web
+    ports:
+      # Reachable only from this computer.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      # CLI logins (~/.claude, ~/.claude.json, ~/.codex) and Quorum history (~/.quorum).
+      - quorum-home:/home/node
+    restart: unless-stopped
+
+volumes:
+  quorum-home:

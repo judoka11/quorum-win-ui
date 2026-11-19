@@ -1,0 +1,12 @@
+.git
+.github
+.claude
+.venv
+**/__pycache__
+**/node_modules
+frontend
+tests
+docs
+examples
+logs
+*.bat

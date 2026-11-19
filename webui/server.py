@@ -64,7 +64,10 @@ async def models(request: Request) -> JSONResponse:
 
 
 async def start_run(request: Request) -> JSONResponse:
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:  # includes undecodable (non-UTF-8) bodies
+        return _error(ValueError("The request is not valid UTF-8 JSON."))
     question = str(body.get("question") or "").strip()
     if not question:
         return _error(ValueError("Type a question first."))
@@ -153,6 +156,8 @@ app = Starlette(routes=[
 def main() -> None:
     parser = argparse.ArgumentParser(description="Quorum Web UI")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Address to listen on; 0.0.0.0 only inside a container (see docker-compose.yml).")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
@@ -161,7 +166,7 @@ def main() -> None:
     if not args.no_browser:
         threading.Timer(1.2, webbrowser.open, [url]).start()
     # Our own event loop (the default proactor loop on Windows), which subprocesses need.
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="warning"))
     asyncio.run(server.serve())
 
 
