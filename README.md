@@ -29,6 +29,11 @@
 >   aren't allowed, and CLI output is read as UTF-8.
 > - `Dockerfile`, `docker-compose.yml`, `Quorum Docker.bat`: the container setup (Linux, so the
 >   upstream agent code runs unchanged there; it listens on 127.0.0.1 only).
+> - Replies: answer a discussion with feedback or a follow-up, and they debate it again with the
+>   earlier turns (your messages and their final answers) as context.
+> - Attachments (📎, drag and drop, or paste): text files and PDFs are put into the prompt, and
+>   images go to codex as `--image` inputs and to claude through its Read tool. Files stay with the
+>   conversation for later replies (`webui/attachments.py`; PDFs need `pypdf`, which both launchers install).
 > - Participants run read-only (web search allowed) in an empty folder, `~/.quorum/web-workdir`.
 >
 > Each debate uses several messages from each subscription (about 10 per AI for the Standard style).

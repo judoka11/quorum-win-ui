@@ -55,6 +55,9 @@ AGY_MAX_ARG = 100_000  # Linux caps one argv string at 128 KiB
 # Set by the MCP run registry for the duration of one Run.
 RUN_CWD: ContextVar[str | None] = ContextVar("quorum_run_cwd", default=None)
 RUN_FAILED: ContextVar[dict[str, str] | None] = ContextVar("quorum_run_failed", default=None)
+# Absolute paths of images attached to the Run (Quorum Web). codex gets them as --image inputs;
+# claude opens them from its working directory with the Read tool.
+RUN_IMAGES: ContextVar[tuple[str, ...]] = ContextVar("quorum_run_images", default=())
 
 PARTICIPANT_PREAMBLE = (
     "You are one participant in a structured multi-model discussion. You may read files in "
@@ -342,6 +345,9 @@ async def call_participant(
                "-o", str(out_file), "-"]
         if effort:
             cmd[5:5] = ["-c", f"model_reasoning_effort={effort}"]
+        # One --image=<path> per image: the option takes several values, so the joined form keeps
+        # it from swallowing the arguments after it.
+        cmd[3:3] = [f"--image={img}" for img in RUN_IMAGES.get() if Path(img).is_file()]
         env["CODEX_HOME"] = str(_codex_home())
         try:
             code, out, err = await _run(cmd, env, cwd, stdin=prompt, timeout=timeout)

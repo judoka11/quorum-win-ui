@@ -14,6 +14,9 @@ if not exist "%VENV%\Scripts\python.exe" (
   python -m uv pip install --quiet --python "%VENV%\Scripts\python.exe" -e . || goto :fail
 )
 
+rem PDF attachments need pypdf (added after the first release, so older setups get it here).
+"%VENV%\Scripts\python.exe" -c "import pypdf" >nul 2>nul || python -m uv pip install --quiet --python "%VENV%\Scripts\python.exe" "pypdf>=5,<7"
+
 where claude >nul 2>nul || echo [!] Claude Code is not installed: npm install -g @anthropic-ai/claude-code   then run: claude
 where codex >nul 2>nul || echo [!] Codex is not installed: npm install -g @openai/codex   then run: codex login
 

@@ -19,7 +19,7 @@ COPY src ./src
 # The terminal UI is not part of this image; the wheel build expects its folder to exist.
 RUN mkdir -p frontend/dist \
  && python3 -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir . \
+ && /opt/venv/bin/pip install --no-cache-dir . "pypdf>=5,<7" \
  && rm -rf frontend
 COPY webui ./webui
 

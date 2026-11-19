@@ -27,7 +27,9 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
+import attachments
 from quorum import mcp as qm
+from quorum.clients.agent_cli import RUN_IMAGES
 from quorum.config import CACHE_DIR
 
 HERE = Path(__file__).resolve().parent
@@ -125,7 +127,7 @@ async def start_run(request: Request) -> JSONResponse:
         return _error(ValueError("Type a question first."))
     history = _load_history()
     parent_id = body.get("parent_id")
-    question, extra = message, {}
+    question, extra, chain = message, {}, []
     if parent_id:
         chain = _chain(history, parent_id)
         if not chain:
@@ -136,6 +138,16 @@ async def start_run(request: Request) -> JSONResponse:
         extra = {"parent": parent_id, "thread": _thread_id(chain[0])}
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        new_files = attachments.save(WORK_DIR, body.get("files") or [])
+    except ValueError as e:
+        return _error(e)
+    # Files stay with the conversation: every turn sees all of the thread's attachments.
+    files = [a for h in chain for a in h.get("attachments", [])] + new_files
+    context, images = attachments.prompt_context(WORK_DIR, files)
+    if context:
+        question = f"{context}\n\n---\n\n{question}"
+    token = RUN_IMAGES.set(tuple(images))  # the Run's task copies this context when it starts
+    try:
         res = await qm._start({
             "question": question,
             "participants": body.get("participants") or [],
@@ -143,7 +155,12 @@ async def start_run(request: Request) -> JSONResponse:
             "cwd": str(WORK_DIR),
         })
     except Exception as e:
+        attachments.remove(WORK_DIR, new_files)
         return _error(e)
+    finally:
+        RUN_IMAGES.reset(token)
+    if new_files:
+        extra["attachments"] = new_files
     history = _load_history()
     history.insert(0, {"id": res["run_id"], "question": message, "method": res["method"],
                        "participants": res["participants"], "started": time.time(), **extra})
@@ -174,7 +191,15 @@ async def get_run(request: Request) -> JSONResponse:
                      "messages": []}
         status, messages = saved["run"], saved["messages"]
     return JSONResponse({**status, "question": entry.get("question", ""), "method": entry.get("method"),
+                         "attachments": entry.get("attachments", []),
                          "messages": messages[since:], "next": len(messages)})
+
+
+async def get_file(request: Request) -> FileResponse | JSONResponse:
+    path = attachments.resolve(WORK_DIR, f"attachments/{request.path_params['path']}")
+    if path is None or path.name.endswith(attachments.EXTRACTED_SUFFIX):
+        return _error(KeyError("File not found"), 404)
+    return FileResponse(path, content_disposition_type="inline")
 
 
 async def cancel_run(request: Request) -> JSONResponse:
@@ -205,6 +230,7 @@ async def delete_history(request: Request) -> JSONResponse:
     if any(qm.RUNS.get(i) and qm.RUNS[i].status == "running" for i in ids):
         return _error(ValueError("Stop the discussion before deleting it."))
     _save_history([h for h in history if h["id"] not in ids])
+    attachments.remove(WORK_DIR, [a for h in history if h["id"] in ids for a in h.get("attachments", [])])
     for i in ids:
         (qm.RUNS_DIR / f"{i}.json").unlink(missing_ok=True)
         qm.RUNS.pop(i, None)
@@ -217,6 +243,7 @@ app = Starlette(routes=[
     Route("/api/runs", start_run, methods=["POST"]),
     Route("/api/runs/{run_id}", get_run),
     Route("/api/runs/{run_id}/cancel", cancel_run, methods=["POST"]),
+    Route("/api/files/{path:path}", get_file),
     Route("/api/history", history),
     Route("/api/history/{run_id}", delete_history, methods=["DELETE"]),
 ])

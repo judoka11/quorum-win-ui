@@ -57,6 +57,20 @@ main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .empty h1 { color: var(--ink); font-size: 28px; letter-spacing: -.02em; margin: 0 0 8px; }
 .empty p { margin: 4px 0; }
 .q-title { font-size: 22px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pending { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.pending:empty { display: none; }
+.files { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.file-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 6px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); font-size: 13px; color: var(--ink); text-decoration: none; max-width: 100%; }
+a.file-chip:hover { border-color: var(--accent); }
+.file-chip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.file-chip small { color: var(--muted); flex: none; }
+.file-chip button { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; }
+.file-chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; flex: none; }
+.file-chip .kind { font-size: 10px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; flex: none; }
+.attach { border: 0; background: none; color: var(--muted); padding: 6px 2px; display: flex; align-self: flex-end; }
+.attach:hover { color: var(--accent); }
+body.dragging .box { border-color: var(--accent); border-style: dashed; }
 .turn + .turn { border-top: 1px solid var(--line); margin-top: 30px; padding-top: 26px; }
 .you { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent); font-weight: 650; margin-bottom: 2px; }
 .q-reply { font-size: 17px; font-weight: 600; margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -117,7 +131,7 @@ main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .chip select, .opt select { border: 0; background: var(--chip); border-radius: 999px; padding: 2px 6px; font-size: 13px; max-width: 150px; }
 .opt { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .unavail { font-size: 12px; color: var(--muted); }
-.box { display: flex; gap: 8px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; box-shadow: var(--shadow); }
+.box { display: flex; gap: 8px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 8px; box-shadow: var(--shadow); }
 .box:focus-within { border-color: var(--accent); }
 textarea { flex: 1; border: 0; outline: 0; background: transparent; resize: none; min-height: 26px; max-height: 220px; padding: 6px 0; }
 .send { border: 0; border-radius: 10px; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); font-weight: 650; }
@@ -151,11 +165,16 @@ textarea { flex: 1; border: 0; outline: 0; background: transparent; resize: none
   <div class="composer">
     <div class="wrap">
       <div class="settings" id="settings"><span class="unavail">Checking which AIs are available…</span></div>
+      <div class="pending" id="pending"></div>
       <div class="box">
+        <button class="attach" id="attachBtn" type="button" title="Attach files (text, PDF, images)" aria-label="Attach files">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <input type="file" id="fileInput" multiple hidden>
         <textarea id="q" rows="1" placeholder="Ask something. They'll answer, critique each other and agree on a final answer…"></textarea>
         <button class="send" id="sendBtn" disabled>Ask</button>
       </div>
-      <div class="hint">Enter to send · Shift+Enter for a new line · runs on your own Claude and ChatGPT subscriptions</div>
+      <div class="hint">Enter to send · Shift+Enter for a new line · drop, paste or 📎 to attach files · runs on your own Claude and ChatGPT subscriptions</div>
     </div>
   </div>
 </main>
@@ -296,8 +315,70 @@ function updateSend() {
   if (running()) { btn.textContent = "Stop"; btn.classList.add("stop"); btn.disabled = false; return; }
   btn.textContent = current ? "Reply" : "Ask"; btn.classList.remove("stop");
   btn.disabled = !ta.value.trim() || participants().length < 2;
-  btn.title = participants().length < 2 ? "Turn on at least two AIs" : "";
+  btn.title = participants().length < 2 ? "Turn on at least two AIs"
+    : !ta.value.trim() && pending.length ? "Type a message to go with the files" : "";
 }
+/* ---------- attachments ---------- */
+const MAX_FILE_MB = 15, MAX_FILES = 10;
+let pending = [];   // File objects waiting to be sent with the next message
+const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1048576 ? `${Math.round(b / 1024)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+function addFiles(list) {
+  for (const f of list) {
+    if (pending.length >= MAX_FILES) { toast(`Attach at most ${MAX_FILES} files per message.`); break; }
+    if (f.size > MAX_FILE_MB * 1048576) { toast(`${f.name} is larger than ${MAX_FILE_MB} MB.`); continue; }
+    pending.push(f);
+  }
+  renderPending(); updateSend(); ta.focus();
+}
+function renderPending() {
+  $("#pending").innerHTML = pending.map((f, i) => `<span class="file-chip" title="${esc(f.name)}">
+    ${f.type.startsWith("image/") ? `<img alt="" data-preview="${i}">` : `<span class="kind">${esc(kindLabel(f.name, f.type))}</span>`}
+    <span class="nm">${esc(f.name)}</span><small>${fmtSize(f.size)}</small>
+    <button type="button" data-rm="${i}" title="Remove">×</button></span>`).join("");
+  $("#pending").querySelectorAll("[data-preview]").forEach((img) => {
+    const url = URL.createObjectURL(pending[img.dataset.preview]);
+    img.src = url; img.onload = () => URL.revokeObjectURL(url);
+  });
+  $("#pending").querySelectorAll("[data-rm]").forEach((b) => b.onclick = () => { pending.splice(+b.dataset.rm, 1); renderPending(); updateSend(); });
+}
+function kindLabel(name, type = "") {
+  if (type === "application/pdf" || /\.pdf$/i.test(name)) return "PDF";
+  if (type.startsWith("image/")) return "IMG";
+  const ext = (name.match(/\.([a-z0-9]{1,5})$/i) || [])[1];
+  return ext ? ext.toUpperCase() : "FILE";
+}
+const readB64 = (f) => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(",")[1] || "");
+  r.onerror = () => reject(r.error || new Error(`Could not read ${f.name}`));
+  r.readAsDataURL(f);
+});
+function attachedFiles(list) {
+  if (!list?.length) return "";
+  return `<div class="files">${list.map((a) => {
+    const url = "/api/files/" + a.path.split("/").slice(1).map(encodeURIComponent).join("/");
+    return `<a class="file-chip" href="${url}" target="_blank" rel="noopener" title="Open ${esc(a.name)}">
+      ${a.kind === "image" ? `<img src="${url}" alt="">` : `<span class="kind">${esc(kindLabel(a.name, a.kind === "pdf" ? "application/pdf" : ""))}</span>`}
+      <span class="nm">${esc(a.name)}</span><small>${fmtSize(a.size)}</small></a>`;
+  }).join("")}</div>`;
+}
+$("#attachBtn").onclick = () => $("#fileInput").click();
+$("#fileInput").onchange = (e) => { addFiles([...e.target.files]); e.target.value = ""; };
+ta.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragenter", (e) => { if (hasFiles(e)) { dragDepth++; document.body.classList.add("dragging"); } });
+document.addEventListener("dragleave", (e) => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+document.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging");
+  addFiles([...e.dataTransfer.files]);
+});
+
 ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 220) + "px"; updateSend(); });
 ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!$("#sendBtn").disabled && !running()) ask(); } });
 $("#sendBtn").onclick = () => running() ? stop() : ask();
@@ -305,11 +386,15 @@ $("#sendBtn").onclick = () => running() ? stop() : ask();
 async function ask() {
   const question = ta.value.trim();
   if (!question) return;
-  $("#sendBtn").disabled = true;
+  const btn = $("#sendBtn");
+  btn.disabled = true;
   const parent_id = current?.ids.at(-1);
   try {
-    const res = await api("/api/runs", { method: "POST", body: JSON.stringify({ question, participants: participants(), method: cfg.method, parent_id }) });
+    if (pending.length) btn.textContent = "Uploading…";
+    const files = await Promise.all(pending.map(async (f) => ({ name: f.name, data: await readB64(f) })));
+    const res = await api("/api/runs", { method: "POST", body: JSON.stringify({ question, participants: participants(), method: cfg.method, parent_id, files }) });
     ta.value = ""; ta.style.height = "auto";
+    pending = []; renderPending();
     if (current && parent_id) {
       const cur = current;
       cur.ids.push(res.run_id);
@@ -448,6 +533,7 @@ function renderTurn(id, i) {
   let html = i === 0
     ? `<h1 class="q-title">${esc(d.question)}</h1>`
     : `<div class="you">You replied</div><div class="q-reply">${esc(d.question)}</div>`;
+  html += attachedFiles(d.attachments);
   html += `<div class="meta">${(d.participants || []).map((p) => `<span style="color:${who(p).color};font-weight:600">● ${esc(who(p).name)}</span>`).join("")}
       ${method.name ? `<span>${esc(method.name)} discussion</span>` : ""}
       ${d.elapsed_seconds != null && d.status === "running" ? `<span>${fmtTime(d.elapsed_seconds)}</span>` : ""}</div>`;
