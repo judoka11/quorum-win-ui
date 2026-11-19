@@ -415,7 +415,7 @@ function renderRun() {
     html += `<div class="card error" style="margin-top:-12px">${Object.entries(d.dropped).map(([p, r]) => `${esc(who(p).name)} dropped out: ${esc(r)}`).join("<br>")}</div>`;
   }
 
-  const content = msgs.filter((m) => m.type === "PhaseMarker" || isContent(m));
+  const content = msgs.filter((m) => m.type === "PhaseMarker" || m.type === "SynthesisResult" || isContent(m));
   if (content.length) {
     html += `<div class="debate-head"><h2>The debate</h2><button class="link-btn" id="toggleDebate">${openDebate ? "Hide" : "Show"}</button></div>
       <div id="debate" class="${openDebate ? "" : "hidden"}">${content.map((m) => renderMsg(m, method)).join("")}</div>`;
@@ -425,6 +425,7 @@ function renderRun() {
   $("#content").innerHTML = html;
   const tg = $("#toggleDebate");
   if (tg) tg.onclick = () => { store.set("debateOpen", !openDebate); renderRun(); };
+  document.querySelectorAll("[data-jump]").forEach((b) => b.onclick = () => view.scrollTo({ top: 0, behavior: "smooth" }));
   if (d.status === "running" && atBottom) view.scrollTop = view.scrollHeight;
 }
 const isContent = (m) => ["IndependentAnswer", "CritiqueResponse", "TeamTextMessage", "FinalPosition"].includes(m.type);
@@ -436,6 +437,13 @@ function renderMsg(m, method) {
   if (m.type === "PhaseMarker") {
     const label = (method.phases || [])[m.phase - 1] || prettify(m.message_key);
     return `<div class="phase">Step ${m.phase} of ${m.total_phases} · ${esc(label)}</div>`;
+  }
+  if (m.type === "SynthesisResult") {
+    // The synthesis itself is the "Final answer" card at the top; point there instead of repeating it.
+    const s = who(m.synthesizer_model || "");
+    return `<div class="card msg" style="--c:${s.color}"><div class="who" style="color:${s.color}">${whoLabel(m.synthesizer_model || "")}<span class="tag">final answer</span></div>
+      <div>Wrote the final answer from the whole debate. It's shown at the top of this page.
+      <button class="link-btn" data-jump>Jump to it ↑</button></div></div>`;
   }
   const w = who(m.source);
   let tags = "", body = "";
